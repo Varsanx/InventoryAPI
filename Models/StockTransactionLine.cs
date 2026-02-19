@@ -6,7 +6,7 @@ namespace InventoryManagementAPI.Models
         public int TxnId { get; set; }
         public int ItemId { get; set; }
         public decimal Quantity { get; set; }
-        public sbyte Direction { get; set; } // 1 = Inward, -1 = Outward
+        public short Direction { get; set; }  // Change to short (smallint in SQL)
         public int? AdjustmentReasonId { get; set; }
         public decimal? UnitPrice { get; set; }
         public decimal? TotalAmount { get; set; }
