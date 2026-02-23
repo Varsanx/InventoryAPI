@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using InventoryManagementAPI.Data;
 using InventoryManagementAPI.Models;
+using InventoryManagementAPI.DTOs;
 
 namespace InventoryManagementAPI.Controllers
 {
@@ -18,7 +19,7 @@ namespace InventoryManagementAPI.Controllers
 
         // GET: api/Items
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<object>>> GetItems(
+        public async Task<ActionResult<IEnumerable<ItemDto>>> GetItems(
             [FromQuery] string? search = null,
             [FromQuery] int? categoryId = null,
             [FromQuery] bool? activeOnly = true)
@@ -48,22 +49,22 @@ namespace InventoryManagementAPI.Controllers
                     i.ItemName.Contains(search));
             }
 
+            // join with current stock to pull quantity on hand (may be null when no record exists yet)
             var items = await query
                 .OrderBy(i => i.ItemCode)
-                .Select(i => new
+                .Select(i => new InventoryManagementAPI.DTOs.ItemDto
                 {
-                    i.ItemId,
-                    i.ItemCode,
-                    i.ItemName,
-                    i.CategoryId,
+                    ItemId = i.ItemId,
+                    ItemCode = i.ItemCode,
+                    ItemName = i.ItemName,
                     CategoryName = i.Category!.CategoryName,
-                    i.UOMId,
-                    UOMCode = i.UOM!.UOMCode,
-                    UOMDescription = i.UOM!.UOMDescription,
-                    i.MinStockLevel,
-                    i.Status,
-                    i.CreatedAt,
-                    i.ModifiedAt
+                    UomCode = i.UOM!.UOMCode,
+                    MinStockLevel = i.MinStockLevel,
+                    Status = i.Status,
+                    QtyOnHand = _context.CurrentStock
+                        .Where(cs => cs.ItemId == i.ItemId)
+                        .Select(cs => (decimal?)cs.QtyOnHand)
+                        .FirstOrDefault() ?? 0m
                 })
                 .ToListAsync();
 
@@ -72,28 +73,25 @@ namespace InventoryManagementAPI.Controllers
 
         // GET: api/Items/5
         [HttpGet("{id}")]
-        public async Task<ActionResult<object>> GetItem(int id)
+        public async Task<ActionResult<ItemDto>> GetItem(int id)
         {
             var item = await _context.Items
                 .Include(i => i.Category)
                 .Include(i => i.UOM)
                 .Where(i => i.ItemId == id)
-                .Select(i => new
+                .Select(i => new InventoryManagementAPI.DTOs.ItemDto
                 {
-                    i.ItemId,
-                    i.ItemCode,
-                    i.ItemName,
-                    i.CategoryId,
+                    ItemId = i.ItemId,
+                    ItemCode = i.ItemCode,
+                    ItemName = i.ItemName,
                     CategoryName = i.Category!.CategoryName,
-                    i.UOMId,
-                    UOMCode = i.UOM!.UOMCode,
-                    UOMDescription = i.UOM!.UOMDescription,
-                    i.MinStockLevel,
-                    i.Status,
-                    i.CreatedAt,
-                    i.CreatedBy,
-                    i.ModifiedAt,
-                    i.ModifiedBy
+                    UomCode = i.UOM!.UOMCode,
+                    MinStockLevel = i.MinStockLevel,
+                    Status = i.Status,
+                    QtyOnHand = _context.CurrentStock
+                        .Where(cs => cs.ItemId == i.ItemId)
+                        .Select(cs => (decimal?)cs.QtyOnHand)
+                        .FirstOrDefault() ?? 0m
                 })
                 .FirstOrDefaultAsync();
 
@@ -287,3 +285,5 @@ namespace InventoryManagementAPI.Controllers
         }
     }
 }
+
+

@@ -4033,11 +4033,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "D:\\CI Global\\InventroyManagementAPI\\InventoryManagementAPI\\InventoryManagementAPI.csproj",
+      "projectUniqueName": "D:\\CI Global\\InventoryBackend\\InventoryAPI\\InventoryManagementAPI.csproj",
       "projectName": "InventoryManagementAPI",
-      "projectPath": "D:\\CI Global\\InventroyManagementAPI\\InventoryManagementAPI\\InventoryManagementAPI.csproj",
+      "projectPath": "D:\\CI Global\\InventoryBackend\\InventoryAPI\\InventoryManagementAPI.csproj",
       "packagesPath": "C:\\Users\\POOVARASAN\\.nuget\\packages\\",
-      "outputPath": "D:\\CI Global\\InventroyManagementAPI\\InventoryManagementAPI\\obj\\",
+      "outputPath": "D:\\CI Global\\InventoryBackend\\InventoryAPI\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\POOVARASAN\\AppData\\Roaming\\NuGet\\NuGet.Config"
