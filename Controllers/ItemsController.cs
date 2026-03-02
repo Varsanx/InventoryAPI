@@ -21,24 +21,27 @@ namespace InventoryManagementAPI.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<ItemDto>>> GetItems(
             [FromQuery] string? search = null,
-            [FromQuery] int? categoryId = null,
-            [FromQuery] bool? activeOnly = true)
+            [FromQuery] string? status = null,        // ✅ FIXED: was 'bool? activeOnly = true' which hid inactive items
+            [FromQuery] string? category = null,      // ✅ NEW: filter by category name
+            [FromQuery] string sortBy = "itemCode",   // ✅ NEW: sort column
+            [FromQuery] string sortDir = "asc")       // ✅ NEW: sort direction
         {
             var query = _context.Items
                 .Include(i => i.Category)
                 .Include(i => i.UOM)
                 .AsQueryable();
 
-            // Filter by active status
-            if (activeOnly == true)
+            // ✅ FIXED: Only filter by status if explicitly passed - no longer defaults to active-only
+            if (!string.IsNullOrEmpty(status) && bool.TryParse(status, out bool statusBool))
             {
-                query = query.Where(i => i.Status);
+                query = query.Where(i => i.Status == statusBool);
             }
+            // If status is null or empty → return ALL items (active + inactive)
 
-            // Filter by category
-            if (categoryId.HasValue)
+            // Filter by category name
+            if (!string.IsNullOrWhiteSpace(category))
             {
-                query = query.Where(i => i.CategoryId == categoryId.Value);
+                query = query.Where(i => i.Category!.CategoryName == category);
             }
 
             // Search by code or name
@@ -49,24 +52,47 @@ namespace InventoryManagementAPI.Controllers
                     i.ItemName.Contains(search));
             }
 
-            // join with current stock to pull quantity on hand (may be null when no record exists yet)
+            // ✅ NEW: Dynamic sort (stock qty sorted after projection below)
+            query = (sortBy.ToLower(), sortDir.ToLower()) switch
+            {
+                ("itemname", "asc")      => query.OrderBy(i => i.ItemName),
+                ("itemname", "desc")     => query.OrderByDescending(i => i.ItemName),
+                ("categoryname", "asc")  => query.OrderBy(i => i.Category!.CategoryName),
+                ("categoryname", "desc") => query.OrderByDescending(i => i.Category!.CategoryName),
+                ("minstocklevel", "asc") => query.OrderBy(i => i.MinStockLevel),
+                ("minstocklevel","desc") => query.OrderByDescending(i => i.MinStockLevel),
+                ("status", "asc")        => query.OrderBy(i => i.Status),
+                ("status", "desc")       => query.OrderByDescending(i => i.Status),
+                ("itemcode", "asc")      => query.OrderBy(i => i.ItemCode),
+                ("itemcode", "desc")     => query.OrderByDescending(i => i.ItemCode),
+                _                        => query.OrderBy(i => i.ItemCode)
+            };
+
+            // Join with CurrentStock to pull QtyOnHand
             var items = await query
-                .OrderBy(i => i.ItemCode)
-                .Select(i => new InventoryManagementAPI.DTOs.ItemDto
+                .Select(i => new ItemDto
                 {
-                    ItemId = i.ItemId,
-                    ItemCode = i.ItemCode,
-                    ItemName = i.ItemName,
+                    ItemId       = i.ItemId,
+                    ItemCode     = i.ItemCode,
+                    ItemName     = i.ItemName,
                     CategoryName = i.Category!.CategoryName,
-                    UomCode = i.UOM!.UOMCode,
+                    UomCode      = i.UOM!.UOMCode,
                     MinStockLevel = i.MinStockLevel,
-                    Status = i.Status,
-                    QtyOnHand = _context.CurrentStock
+                    Status       = i.Status,
+                    QtyOnHand    = _context.CurrentStock
                         .Where(cs => cs.ItemId == i.ItemId)
                         .Select(cs => (decimal?)cs.QtyOnHand)
                         .FirstOrDefault() ?? 0m
                 })
                 .ToListAsync();
+
+            // ✅ NEW: Sort by QtyOnHand after projection (can't do in EF query directly)
+            items = (sortBy.ToLower(), sortDir.ToLower()) switch
+            {
+                ("qtyonhand", "asc")  => items.OrderBy(i => i.QtyOnHand).ToList(),
+                ("qtyonhand", "desc") => items.OrderByDescending(i => i.QtyOnHand).ToList(),
+                _ => items
+            };
 
             return Ok(items);
         }
@@ -79,16 +105,16 @@ namespace InventoryManagementAPI.Controllers
                 .Include(i => i.Category)
                 .Include(i => i.UOM)
                 .Where(i => i.ItemId == id)
-                .Select(i => new InventoryManagementAPI.DTOs.ItemDto
+                .Select(i => new ItemDto
                 {
-                    ItemId = i.ItemId,
-                    ItemCode = i.ItemCode,
-                    ItemName = i.ItemName,
-                    CategoryName = i.Category!.CategoryName,
-                    UomCode = i.UOM!.UOMCode,
+                    ItemId        = i.ItemId,
+                    ItemCode      = i.ItemCode,
+                    ItemName      = i.ItemName,
+                    CategoryName  = i.Category!.CategoryName,
+                    UomCode       = i.UOM!.UOMCode,
                     MinStockLevel = i.MinStockLevel,
-                    Status = i.Status,
-                    QtyOnHand = _context.CurrentStock
+                    Status        = i.Status,
+                    QtyOnHand     = _context.CurrentStock
                         .Where(cs => cs.ItemId == i.ItemId)
                         .Select(cs => (decimal?)cs.QtyOnHand)
                         .FirstOrDefault() ?? 0m
@@ -124,12 +150,12 @@ namespace InventoryManagementAPI.Controllers
                 item.ItemId,
                 item.ItemCode,
                 item.ItemName,
-                UOMCode = item.UOM!.UOMCode,
-                QtyOnHand = currentStock?.QtyOnHand ?? 0,
+                UOMCode     = item.UOM!.UOMCode,
+                QtyOnHand   = currentStock?.QtyOnHand ?? 0,
                 item.MinStockLevel,
                 StockStatus = (currentStock?.QtyOnHand ?? 0) == 0 ? "OUT OF STOCK" :
-                             (currentStock?.QtyOnHand ?? 0) < item.MinStockLevel ? "LOW STOCK" :
-                             "IN STOCK"
+                              (currentStock?.QtyOnHand ?? 0) < item.MinStockLevel ? "LOW STOCK" :
+                              "IN STOCK"
             };
 
             return Ok(result);
@@ -179,7 +205,7 @@ namespace InventoryManagementAPI.Controllers
             // Initialize CurrentStock for new item
             var currentStock = new CurrentStock
             {
-                ItemId = item.ItemId,
+                ItemId    = item.ItemId,
                 QtyOnHand = 0,
                 UpdatedAt = DateTime.Now
             };
@@ -272,7 +298,7 @@ namespace InventoryManagementAPI.Controllers
                 return BadRequest(new { message = "Cannot delete item that has transaction history. Consider marking as inactive instead." });
             }
 
-            item.Status = false;
+            item.Status     = false;
             item.ModifiedAt = DateTime.Now;
             await _context.SaveChangesAsync();
 
@@ -285,5 +311,3 @@ namespace InventoryManagementAPI.Controllers
         }
     }
 }
-
-
