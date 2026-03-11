@@ -30,23 +30,21 @@ namespace InventoryManagementAPI.Controllers
                 .FirstOrDefaultAsync(u => u.Username == loginDto.Username);
 
             if (user == null)
-            {
                 return Unauthorized(new { message = "Invalid username or password" });
-            }
 
             // Verify password
             bool isPasswordValid = BCrypt.Net.BCrypt.Verify(loginDto.Password, user.PasswordHash);
 
             if (!isPasswordValid)
-            {
                 return Unauthorized(new { message = "Invalid username or password" });
-            }
 
             // Check if user is active
             if (!user.IsActive)
-            {
                 return Unauthorized(new { message = "User account is inactive" });
-            }
+
+            // Check approval status
+            if (user.ApprovalStatus != "Approved")
+                return Unauthorized(new { message = "Your account is pending approval. Please contact the administrator." });
 
             // Generate JWT token
             var token = _jwtHelper.GenerateToken(user.UserId, user.Username, user.Role);
@@ -72,41 +70,28 @@ namespace InventoryManagementAPI.Controllers
                 .FirstOrDefaultAsync(u => u.Username == registerDto.Username);
 
             if (existingUser != null)
-            {
                 return BadRequest(new { message = "Username already exists" });
-            }
 
             // Hash password
             string passwordHash = BCrypt.Net.BCrypt.HashPassword(registerDto.Password);
 
-            // Create new user
+            // Create new user (pending approval by default)
             var newUser = new User
             {
                 Username = registerDto.Username,
                 PasswordHash = passwordHash,
                 FullName = registerDto.FullName,
                 Email = registerDto.Email,
-                Role = registerDto.Role,
+                Role = registerDto.Role ?? "User",
                 IsActive = true,
-                CreatedAt = DateTime.Now
+                CreatedAt = DateTime.Now,
+                ApprovalStatus = "Pending"
             };
 
             _context.Users.Add(newUser);
             await _context.SaveChangesAsync();
 
-            // Generate JWT token
-            var token = _jwtHelper.GenerateToken(newUser.UserId, newUser.Username, newUser.Role);
-
-            var response = new AuthResponseDto
-            {
-                UserId = newUser.UserId,
-                Username = newUser.Username,
-                FullName = newUser.FullName,
-                Role = newUser.Role,
-                Token = token
-            };
-
-            return CreatedAtAction(nameof(Login), response);
+            return Ok(new { message = "Registration successful. Please wait for admin approval before logging in." });
         }
 
         // POST: api/Auth/ChangePassword
@@ -116,19 +101,15 @@ namespace InventoryManagementAPI.Controllers
             var user = await _context.Users.FindAsync(changePasswordDto.UserId);
 
             if (user == null)
-            {
                 return NotFound(new { message = "User not found" });
-            }
 
             // Verify current password
             bool isPasswordValid = BCrypt.Net.BCrypt.Verify(changePasswordDto.CurrentPassword, user.PasswordHash);
 
             if (!isPasswordValid)
-            {
                 return BadRequest(new { message = "Current password is incorrect" });
-            }
 
-            // Hash new password
+            // Hash and save new password
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(changePasswordDto.NewPassword);
             user.ModifiedAt = DateTime.Now;
 

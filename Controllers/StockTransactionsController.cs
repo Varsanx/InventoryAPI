@@ -18,9 +18,12 @@ namespace InventoryManagementAPI.Controllers
         }
 
         // GET: api/StockTransactions
+        // ✅ UPDATED: now accepts txnTypeCode (string), sortBy, sortDir
         [HttpGet]
         public async Task<ActionResult<IEnumerable<object>>> GetTransactions(
-            [FromQuery] int? txnTypeId = null,
+            [FromQuery] string? txnTypeCode = null,   // changed from int? txnTypeId
+            [FromQuery] string sortBy = "txnDate",    // new
+            [FromQuery] string sortDir = "desc",      // new
             [FromQuery] DateTime? fromDate = null,
             [FromQuery] DateTime? toDate = null,
             [FromQuery] int? itemId = null)
@@ -31,10 +34,10 @@ namespace InventoryManagementAPI.Controllers
                     .ThenInclude(l => l.Item)
                 .AsQueryable();
 
-            // Filter by transaction type
-            if (txnTypeId.HasValue)
+            // Filter by transaction type CODE (joins to TxnType table)
+            if (!string.IsNullOrEmpty(txnTypeCode))
             {
-                query = query.Where(st => st.TxnTypeId == txnTypeId.Value);
+                query = query.Where(st => st.TxnType!.TxnTypeCode == txnTypeCode);
             }
 
             // Filter by date range
@@ -54,8 +57,19 @@ namespace InventoryManagementAPI.Controllers
                 query = query.Where(st => st.Lines.Any(l => l.ItemId == itemId.Value));
             }
 
+            // Dynamic sort
+            query = (sortBy.ToLower(), sortDir.ToLower()) switch
+            {
+                ("txndate", "asc")           => query.OrderBy(st => st.TxnDate),
+                ("txndate", "desc")          => query.OrderByDescending(st => st.TxnDate),
+                ("totalquantity", "asc")     => query.OrderBy(st => st.Lines.Sum(l => l.Quantity * l.Direction)),
+                ("totalquantity", "desc")    => query.OrderByDescending(st => st.Lines.Sum(l => l.Quantity * l.Direction)),
+                ("txntypecode", "asc")       => query.OrderBy(st => st.TxnType!.TxnTypeCode),
+                ("txntypecode", "desc")      => query.OrderByDescending(st => st.TxnType!.TxnTypeCode),
+                _                            => query.OrderByDescending(st => st.TxnDate)
+            };
+
             var transactions = await query
-                .OrderByDescending(st => st.TxnDate)
                 .Select(st => new
                 {
                     st.TxnId,
@@ -162,13 +176,11 @@ namespace InventoryManagementAPI.Controllers
         {
             try
             {
-                // ✅ VALIDATION: Check if transaction has items
                 if (dto.Lines == null || dto.Lines.Count == 0)
                 {
                     return BadRequest(new { message = "Transaction must have at least one item" });
                 }
 
-                // Get Inward transaction type
                 var inwardType = await _context.TxnTypes
                     .FirstOrDefaultAsync(t => t.TxnTypeCode == "INWARD");
 
@@ -177,12 +189,10 @@ namespace InventoryManagementAPI.Controllers
                     return BadRequest(new { message = "Inward transaction type not found in database" });
                 }
 
-                // Start database transaction
                 using var transaction = await _context.Database.BeginTransactionAsync();
 
                 try
                 {
-                    // Create transaction header
                     var stockTxn = new StockTransaction
                     {
                         TxnTypeId = inwardType.TxnTypeId,
@@ -190,16 +200,14 @@ namespace InventoryManagementAPI.Controllers
                         ReferenceNo = dto.ReferenceNo,
                         Remarks = dto.Remarks,
                         CreatedAt = DateTime.Now,
-                        CreatedBy = 1 // TODO: Get from authenticated user
+                        CreatedBy = 1
                     };
 
                     _context.StockTransactions.Add(stockTxn);
                     await _context.SaveChangesAsync();
 
-                    // Create lines and update stock
                     foreach (var lineDto in dto.Lines)
                     {
-                        // Validate item exists and is active
                         var item = await _context.Items.FindAsync(lineDto.ItemId);
                         
                         if (item == null)
@@ -214,13 +222,12 @@ namespace InventoryManagementAPI.Controllers
                             return BadRequest(new { message = $"Item {item.ItemCode} is inactive and cannot be used" });
                         }
 
-                        // Create transaction line
                         var line = new StockTransactionLine
                         {
                             TxnId = stockTxn.TxnId,
                             ItemId = lineDto.ItemId,
                             Quantity = lineDto.Quantity,
-                            Direction = 1, // Inward = +1
+                            Direction = 1,
                             UnitPrice = lineDto.UnitPrice,
                             TotalAmount = lineDto.Quantity * (lineDto.UnitPrice ?? 0),
                             Remarks = lineDto.Remarks,
@@ -230,13 +237,11 @@ namespace InventoryManagementAPI.Controllers
 
                         _context.StockTransactionLines.Add(line);
 
-                        // Update or create current stock
                         var currentStock = await _context.CurrentStock
                             .FirstOrDefaultAsync(cs => cs.ItemId == lineDto.ItemId);
 
                         if (currentStock == null)
                         {
-                            // Create new stock record
                             currentStock = new CurrentStock
                             {
                                 ItemId = lineDto.ItemId,
@@ -247,13 +252,11 @@ namespace InventoryManagementAPI.Controllers
                         }
                         else
                         {
-                            // Update existing stock
                             currentStock.QtyOnHand += lineDto.Quantity;
                             currentStock.UpdatedAt = DateTime.Now;
                         }
                     }
 
-                    // Save all changes
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
 
@@ -290,13 +293,11 @@ namespace InventoryManagementAPI.Controllers
         {
             try
             {
-                // ✅ VALIDATION: Check if transaction has items
                 if (dto.Lines == null || dto.Lines.Count == 0)
                 {
                     return BadRequest(new { message = "Transaction must have at least one item" });
                 }
 
-                // Get Outward transaction type
                 var outwardType = await _context.TxnTypes
                     .FirstOrDefaultAsync(t => t.TxnTypeCode == "OUTWARD");
 
@@ -305,7 +306,6 @@ namespace InventoryManagementAPI.Controllers
                     return BadRequest(new { message = "Outward transaction type not found in database" });
                 }
 
-                // ✅ VALIDATE STOCK AVAILABILITY FOR ALL ITEMS FIRST
                 foreach (var lineDto in dto.Lines)
                 {
                     var item = await _context.Items.FindAsync(lineDto.ItemId);
@@ -320,7 +320,6 @@ namespace InventoryManagementAPI.Controllers
                         return BadRequest(new { message = $"Item {item.ItemCode} is inactive and cannot be used" });
                     }
 
-                    // Check current stock
                     var currentStock = await _context.CurrentStock
                         .FirstOrDefaultAsync(cs => cs.ItemId == lineDto.ItemId);
 
@@ -335,12 +334,10 @@ namespace InventoryManagementAPI.Controllers
                     }
                 }
 
-                // Start database transaction
                 using var transaction = await _context.Database.BeginTransactionAsync();
 
                 try
                 {
-                    // Create transaction header
                     var stockTxn = new StockTransaction
                     {
                         TxnTypeId = outwardType.TxnTypeId,
@@ -354,18 +351,16 @@ namespace InventoryManagementAPI.Controllers
                     _context.StockTransactions.Add(stockTxn);
                     await _context.SaveChangesAsync();
 
-                    // Create lines and update stock
                     foreach (var lineDto in dto.Lines)
                     {
                         var item = await _context.Items.FindAsync(lineDto.ItemId);
 
-                        // Create transaction line
                         var line = new StockTransactionLine
                         {
                             TxnId = stockTxn.TxnId,
                             ItemId = lineDto.ItemId,
                             Quantity = lineDto.Quantity,
-                            Direction = -1, // Outward = -1
+                            Direction = -1,
                             UnitPrice = lineDto.UnitPrice,
                             TotalAmount = lineDto.Quantity * (lineDto.UnitPrice ?? 0),
                             Remarks = lineDto.Remarks,
@@ -375,7 +370,6 @@ namespace InventoryManagementAPI.Controllers
 
                         _context.StockTransactionLines.Add(line);
 
-                        // Update current stock
                         var currentStock = await _context.CurrentStock
                             .FirstOrDefaultAsync(cs => cs.ItemId == lineDto.ItemId);
 
@@ -384,7 +378,6 @@ namespace InventoryManagementAPI.Controllers
                             currentStock.QtyOnHand -= lineDto.Quantity;
                             currentStock.UpdatedAt = DateTime.Now;
 
-                            // ✅ CREATE ALERT IF STOCK FALLS BELOW MINIMUM
                             if (currentStock.QtyOnHand < item!.MinStockLevel)
                             {
                                 var existingAlert = await _context.StockAlerts
@@ -392,7 +385,6 @@ namespace InventoryManagementAPI.Controllers
 
                                 if (existingAlert == null)
                                 {
-                                    // Create new alert
                                     var alert = new StockAlert
                                     {
                                         ItemId = lineDto.ItemId,
@@ -405,7 +397,6 @@ namespace InventoryManagementAPI.Controllers
                                 }
                                 else
                                 {
-                                    // Update existing alert
                                     existingAlert.QtyOnHand = currentStock.QtyOnHand;
                                     existingAlert.AlertDate = DateTime.Now;
                                 }
@@ -413,7 +404,6 @@ namespace InventoryManagementAPI.Controllers
                         }
                     }
 
-                    // Save all changes
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
 
@@ -450,13 +440,11 @@ namespace InventoryManagementAPI.Controllers
         {
             try
             {
-                // ✅ VALIDATION: Check if transaction has items
                 if (dto.Lines == null || dto.Lines.Count == 0)
                 {
                     return BadRequest(new { message = "Transaction must have at least one item" });
                 }
 
-                // Get Adjustment transaction type
                 var adjustType = await _context.TxnTypes
                     .FirstOrDefaultAsync(t => t.TxnTypeCode == "ADJUST");
 
@@ -465,7 +453,6 @@ namespace InventoryManagementAPI.Controllers
                     return BadRequest(new { message = "Adjustment transaction type not found in database" });
                 }
 
-                // Validate that all lines have adjustment reason
                 if (dto.Lines.Any(l => !l.AdjustmentReasonId.HasValue))
                 {
                     return BadRequest(new { message = "Adjustment reason is required for all lines" });
@@ -498,7 +485,6 @@ namespace InventoryManagementAPI.Controllers
                             return BadRequest(new { message = $"Item with ID {lineDto.ItemId} not found or inactive" });
                         }
 
-                        // Determine direction (1 for increase, -1 for decrease)
                         sbyte direction = 1;
                         
                         if (lineDto.Remarks?.ToLower().Contains("decrease") == true ||
@@ -522,7 +508,6 @@ namespace InventoryManagementAPI.Controllers
 
                         _context.StockTransactionLines.Add(line);
 
-                        // Update current stock
                         var currentStock = await _context.CurrentStock
                             .FirstOrDefaultAsync(cs => cs.ItemId == lineDto.ItemId);
 

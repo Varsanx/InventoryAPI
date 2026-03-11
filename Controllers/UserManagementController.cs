@@ -43,7 +43,6 @@ namespace InventoryManagementAPI.Controllers
                     .ToListAsync();
 
                 Console.WriteLine($"[USER MGMT] Found {users.Count} users");
-
                 return Ok(users);
             }
             catch (Exception ex)
@@ -107,20 +106,19 @@ namespace InventoryManagementAPI.Controllers
                     return BadRequest(new { message = "Username already exists" });
                 }
 
-                // Hash password
                 var passwordHash = BCrypt.Net.BCrypt.HashPassword(request.Password);
 
                 var user = new User
                 {
-                    Username = request.Username,
-                    PasswordHash = passwordHash,
-                    FullName = request.FullName,
-                    Email = request.Email,
-                    Role = request.Role,
-                    IsActive = true,
+                    Username       = request.Username,
+                    PasswordHash   = passwordHash,
+                    FullName       = request.FullName,
+                    Email          = request.Email,
+                    Role           = request.Role,
+                    IsActive       = true,
                     ApprovalStatus = "Approved", // Admin-created users are auto-approved
-                    CreatedAt = DateTime.Now,
-                    CreatedBy = request.CreatedBy
+                    CreatedAt      = DateTime.Now,
+                    CreatedBy      = request.CreatedBy
                 };
 
                 _context.Users.Add(user);
@@ -130,10 +128,10 @@ namespace InventoryManagementAPI.Controllers
 
                 return Ok(new
                 {
-                    message = $"User {user.Username} created successfully",
-                    userId = user.UserId,
+                    message  = $"User {user.Username} created successfully",
+                    userId   = user.UserId,
                     username = user.Username,
-                    role = user.Role
+                    role     = user.Role
                 });
             }
             catch (Exception ex)
@@ -144,23 +142,30 @@ namespace InventoryManagementAPI.Controllers
         }
 
         // POST: api/UserManagement/UpdateUser
+        // Used for full profile updates (fullName, email, role, isActive together)
         [HttpPost("UpdateUser")]
         public async Task<ActionResult> UpdateUser([FromBody] UpdateUserRequest request)
         {
             try
             {
                 var user = await _context.Users.FindAsync(request.UserId);
-                
+
                 if (user == null)
                 {
                     return NotFound(new { message = "User not found" });
                 }
 
-                // Update fields
-                user.FullName = request.FullName;
-                user.Email = request.Email;
-                user.Role = request.Role;
-                user.IsActive = request.IsActive;
+                // ✅ Only update fields if they are provided - prevents accidental data wipe
+                if (!string.IsNullOrWhiteSpace(request.FullName))
+                    user.FullName = request.FullName;
+
+                if (request.Email != null)
+                    user.Email = request.Email;
+
+                if (!string.IsNullOrWhiteSpace(request.Role))
+                    user.Role = request.Role;
+
+                user.IsActive   = request.IsActive;
                 user.ModifiedAt = DateTime.Now;
                 user.ModifiedBy = request.ModifiedBy;
 
@@ -174,6 +179,43 @@ namespace InventoryManagementAPI.Controllers
             }
         }
 
+        // ✅ NEW: POST: api/UserManagement/ToggleActive
+        // Dedicated endpoint just for activate/deactivate - never touches name/email/role
+        [HttpPost("ToggleActive")]
+        public async Task<ActionResult> ToggleActive([FromBody] ToggleActiveRequest request)
+        {
+            try
+            {
+                var user = await _context.Users.FindAsync(request.UserId);
+
+                if (user == null)
+                {
+                    return NotFound(new { message = "User not found" });
+                }
+
+                // Prevent deactivating Admin accounts
+                if (user.Role == "Admin" && !request.IsActive)
+                {
+                    return BadRequest(new { message = "Admin accounts cannot be deactivated" });
+                }
+
+                user.IsActive   = request.IsActive;
+                user.ModifiedAt = DateTime.Now;
+                user.ModifiedBy = request.ModifiedBy;
+
+                await _context.SaveChangesAsync();
+
+                var action = request.IsActive ? "activated" : "deactivated";
+                Console.WriteLine($"[USER MGMT] User {user.Username} {action}");
+
+                return Ok(new { message = $"User {user.Username} {action} successfully" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error updating user status", error = ex.Message });
+            }
+        }
+
         // POST: api/UserManagement/ResetPassword (ADMIN ONLY)
         [HttpPost("ResetPassword")]
         public async Task<ActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
@@ -181,16 +223,15 @@ namespace InventoryManagementAPI.Controllers
             try
             {
                 var user = await _context.Users.FindAsync(request.UserId);
-                
+
                 if (user == null)
                 {
                     return NotFound(new { message = "User not found" });
                 }
 
-                // Hash new password
                 user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
-                user.ModifiedAt = DateTime.Now;
-                user.ModifiedBy = request.ResetBy;
+                user.ModifiedAt   = DateTime.Now;
+                user.ModifiedBy   = request.ResetBy;
 
                 await _context.SaveChangesAsync();
 
@@ -211,15 +252,15 @@ namespace InventoryManagementAPI.Controllers
             try
             {
                 var user = await _context.Users.FindAsync(request.UserId);
-                
+
                 if (user == null)
                 {
                     return NotFound(new { message = "User not found" });
                 }
 
-                user.ApprovalStatus = "Approved";
-                user.ApprovedBy = request.ApprovedBy;
-                user.ApprovedAt = DateTime.Now;
+                user.ApprovalStatus  = "Approved";
+                user.ApprovedBy      = request.ApprovedBy;
+                user.ApprovedAt      = DateTime.Now;
                 user.RejectionReason = null;
 
                 await _context.SaveChangesAsync();
@@ -239,15 +280,15 @@ namespace InventoryManagementAPI.Controllers
             try
             {
                 var user = await _context.Users.FindAsync(request.UserId);
-                
+
                 if (user == null)
                 {
                     return NotFound(new { message = "User not found" });
                 }
 
-                user.ApprovalStatus = "Rejected";
-                user.ApprovedBy = request.RejectedBy;
-                user.ApprovedAt = DateTime.Now;
+                user.ApprovalStatus  = "Rejected";
+                user.ApprovedBy      = request.RejectedBy;
+                user.ApprovedAt      = DateTime.Now;
                 user.RejectionReason = request.Reason;
 
                 await _context.SaveChangesAsync();
@@ -264,41 +305,49 @@ namespace InventoryManagementAPI.Controllers
     // ✅ REQUEST MODELS
     public class CreateUserRequest
     {
-        public string Username { get; set; } = string.Empty;
-        public string Password { get; set; } = string.Empty;
-        public string FullName { get; set; } = string.Empty;
-        public string? Email { get; set; }
-        public string Role { get; set; } = "Storekeeper";
-        public int CreatedBy { get; set; }
+        public string Username  { get; set; } = string.Empty;
+        public string Password  { get; set; } = string.Empty;
+        public string FullName  { get; set; } = string.Empty;
+        public string? Email    { get; set; }
+        public string Role      { get; set; } = "Storekeeper";
+        public int CreatedBy    { get; set; }
     }
 
     public class UpdateUserRequest
     {
-        public int UserId { get; set; }
-        public string FullName { get; set; } = string.Empty;
-        public string? Email { get; set; }
-        public string Role { get; set; } = string.Empty;
-        public bool IsActive { get; set; }
+        public int UserId       { get; set; }
+        public string FullName  { get; set; } = string.Empty;
+        public string? Email    { get; set; }
+        public string Role      { get; set; } = string.Empty;
+        public bool IsActive    { get; set; }
+        public int ModifiedBy   { get; set; }
+    }
+
+    // ✅ NEW: Dedicated toggle model - only touches IsActive, never name/email/role
+    public class ToggleActiveRequest
+    {
+        public int UserId     { get; set; }
+        public bool IsActive  { get; set; }
         public int ModifiedBy { get; set; }
     }
 
     public class ResetPasswordRequest
     {
-        public int UserId { get; set; }
-        public string NewPassword { get; set; } = string.Empty;
-        public int ResetBy { get; set; }
+        public int UserId          { get; set; }
+        public string NewPassword  { get; set; } = string.Empty;
+        public int ResetBy         { get; set; }
     }
 
     public class ApprovalRequest
     {
-        public int UserId { get; set; }
+        public int UserId     { get; set; }
         public int ApprovedBy { get; set; }
     }
 
     public class RejectionRequest
     {
-        public int UserId { get; set; }
+        public int UserId     { get; set; }
         public int RejectedBy { get; set; }
-        public string Reason { get; set; } = string.Empty;
+        public string Reason  { get; set; } = string.Empty;
     }
 }
