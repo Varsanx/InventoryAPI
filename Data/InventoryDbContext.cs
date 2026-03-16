@@ -21,6 +21,7 @@ namespace InventoryManagementAPI.Data
         public DbSet<StockTransactionLine> StockTransactionLines { get; set; }
         public DbSet<CurrentStock> CurrentStock { get; set; }
         public DbSet<StockAlert> StockAlerts { get; set; }
+        
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
